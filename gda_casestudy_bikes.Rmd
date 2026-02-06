@@ -1,0 +1,357 @@
+---
+title: "GDA Case Study 1"
+author: "May Wu"
+date: "2026-02-04"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+---
+This case study analyzes bike usage based on data from 2019 and 2020 Q1. The data source is provided by Motivate International Inc., a well-known bike-sharing operator.
+
+Objective: To explore how members and non-members of the bike-sharing service differ in their riding behavior.
+
+Approach: We first import and inspect the data, then clean it, compute descriptive statistics, and create visualizations. Key findings are summarized at the end.
+
+## 1. Data preparation
+
+### 1.1 Import Data
+```{r Import data}
+#load libraries
+library(dplyr)
+
+#Inspect raw data
+df_2019 <- read.csv('Divvy_Trips_2019_Q1.csv')
+df_2020 <- read.csv('Divvy_Trips_2020_Q1.csv')
+str(df_2019)
+str(df_2020)
+#Correct data type 
+df_2019$day_of_week <- as.character(df_2019$day_of_week)
+df_2020$day_of_week <- as.character(df_2020$day_of_week)
+```
+
+df_2019: Columns K and L contain missing values; values in column E are inconsistent.
+
+df_2020: Contains incomplete ride records;
+
+Converting trip durations in both tables into minutes before merging the tables
+
+### 1.2 Unify trip duration/length unit
+
+```{r}
+# df_2019: calculate ride_length, and compare it with column duration
+df_2019$ride_length_sec <- sapply(df_2019$ride_length, function(x) {
+  hms <- unlist(strsplit(x, ":"))
+  as.numeric(hms[1])*3600 + as.numeric(hms[2])*60 + as.numeric(hms[3])
+})
+df_2019$ride_length_min <- df_2019$ride_length_sec / 60 #convert ride_length to minutes
+
+# df_2020: calculate ride_length
+df_2020$ride_length_sec <- sapply(df_2020$ride_length, function(x) {
+  hms <- unlist(strsplit(x, ":"))
+  as.numeric(hms[1])*3600 + as.numeric(hms[2])*60 + as.numeric(hms[3])
+})
+df_2020$ride_length_min <- df_2020$ride_length_sec / 60 #convert ride_length to minutes
+```
+
+### 1.3 Merge dataset
+
+The two datasets have slightly different column names. We align 2020 column names and add missing columns to match 2019 schema, then combine the datasets into a single table.
+
+```{r Merge Sheets}
+# Check column names used in both tables
+colnames(df_2019)
+colnames(df_2020)
+
+# adding unique rows of df_2019 to df_2020
+df_2020$bikeid <- NA
+df_2020$tripduration <- NA
+df_2020$gender <- NA
+df_2020$birthyear <- NA
+
+# rename df_2020 columns to match df_2019
+colnames(df_2020)[colnames(df_2020) == "ride_id"] <- "trip_id"
+colnames(df_2020)[colnames(df_2020) == "started_at"] <- "start_time"
+colnames(df_2020)[colnames(df_2020) == "ended_at"] <- "end_time"
+colnames(df_2020)[colnames(df_2020) == "start_station_id"] <- "from_station_id"
+colnames(df_2020)[colnames(df_2020) == "start_station_name"] <- "from_station_name"
+colnames(df_2020)[colnames(df_2020) == "end_station_id"] <- "to_station_id"
+colnames(df_2020)[colnames(df_2020) == "end_station_name"] <- "to_station_name"
+colnames(df_2020)[colnames(df_2020) == "member_casual"] <- "usertype"
+
+# order columns
+df_2020 <- df_2020[, colnames(df_2019)]
+
+# combine two tables
+combined_df <- rbind(df_2019, df_2020)
+```
+
+
+Next, we inspect the ride lengths for any unusual values. 
+
+
+### 1.4 Remove outliers
+
+We inspect ride durations and identify extreme values exceeding 24 hours (1440 minutes), likely due to data recording errors. One extreme example is 10,628,400 seconds (~123 days). These outliers are removed to prevent skewing analyses of typical bike usage.
+
+```{r}
+# mark outliers
+outliers <- (!is.na(combined_df$ride_length_min) & combined_df$ride_length_min > 1440) |
+            (!is.na(combined_df$tripduration) & combined_df$tripduration > 1440*60)
+
+sum(outliers, na.rm = TRUE)
+
+# remove them
+combined_df_clean <- combined_df[!outliers, ]
+
+head(combined_df_clean)
+```
+
+### 1.5 Standardize User Types
+
+To ensure consistency, user type labels are converted to lowercase and mapped to member and casual.
+```{r}
+# unify usertype values
+combined_df_clean$usertype <- tolower(combined_df_clean$usertype)
+combined_df_clean$usertype <- recode(
+  combined_df_clean$usertype,
+  "customer" = "casual",
+  "subscriber" = "member"
+)
+
+str(combined_df_clean)
+```
+
+After cleaning, 482 extreme trip records have been removed from the analysis.
+
+## 2.Descriptive statistics of the trips
+
+### 2.1 Overall ride length of all data
+
+```{r}
+# Overall ride
+# Mean of ride_length
+mean(combined_df_clean$ride_length_min, na.rm = TRUE)
+
+# Max of ride_length
+max(combined_df_clean$ride_length_min, na.rm = TRUE)
+
+# Mode of day_of_week
+names(sort(table(combined_df_clean$day_of_week), decreasing = TRUE))[1]
+```
+
+**Table 1**. The overall ride length
+
+| Measure                          | Value      |
+|----------------------------------|-----------     |
+| Mean ride length            | 13.66 (min) |
+| Max ride length            |1435.92 (min)  |
+| Most common day of               | Tuesday    |
+
+--
+
+Table 1 shows the overall ride length statistics across all trips. On average, rides last about 13.66 minutes. The maximum ride length is 1,435.92 minutes, which is considerably higher than the mean and indicates some exceptionally long trips, even after removing extreme outliers. The most common day for rides is Tuesday, suggesting that weekday usage is higher than weekend usage.
+
+### 2.2 Trip details by user type
+
+To better understand differences between casual and member users, we summarize rides by user type.
+
+```{r}
+#by usertype
+get_mode <- function(x) {
+  ux <- na.omit(x) #remove NA values
+  ux[which.max(tabulate(match(ux, ux)))] #tabulate() counts the number of occurrences.
+}
+
+pivot_table <- combined_df_clean %>%
+  group_by(usertype) %>%
+  summarise(
+    Mean_min = round(mean(ride_length_min, na.rm = TRUE), 2),
+    Max_min  = round(max(ride_length_min, na.rm = TRUE), 2),
+    Count    = n(),
+    Mode_day = get_mode(day_of_week)
+  )
+
+pivot_table
+
+## ride count by usertype and weekdays
+combined_df_clean %>%
+  group_by(usertype, day_of_week) %>%
+  summarise(Count = n())
+```
+
+(1) Casual Users
+
+Weekdays: Relatively low ride counts, ranging from about 6,700 to 8,500 rides per day.
+
+Weekends: Ride counts increase sharply, especially on Sunday, reaching 18,578 rides, which is more than double a typical weekday.
+
+
+(2) Member Users
+
+Weekdays: Very high ride counts, around 115,000–128,000 rides per day.
+
+Weekends: Ride counts drop to about 59,000–60,000 rides, roughly half of weekday usage.
+
+
+### 2.3 Ride Statistics by Year and Usertype
+
+To explore temporal patterns, we further break down ride statistics by year and user type. This allows us to observe how usage patterns differ between 2019 and 2020, and between casual and member users. 
+
+```{r}
+combined_df_clean$Year <- as.numeric(substr(combined_df_clean$start_time, 1, 4))
+head(combined_df_clean$Year)
+
+pivot_table2 <- combined_df_clean %>%
+  group_by(Year, usertype) %>%
+  summarise(
+    Mean_min = round(mean(ride_length_min, na.rm = TRUE), 2),
+    Max_min  = round(max(ride_length_min, na.rm = TRUE), 2),
+    Count    = n(),
+    Mode_day = get_mode(day_of_week)
+  )
+
+pivot_table2
+```
+
+Casual users tend to take longer rides mainly on weekends, reflecting recreational use, while member users take shorter rides mostly on weekdays, consistent with commuting behavior. Year-to-year growth is stronger for casual users, suggesting rising popularity among non-members.
+
+## 3. Visualization
+
+### 3.1 The average ride duration comparison
+Figure 1 compares the average ride duration of casual and member users in 2019 Q1 and 2020 Q1.
+Casual users consistently take longer rides than member users in both years, with an average duration around 35–37 minutes, compared to 11–12 minutes for members.
+We also observe that casual rides increased significantly from 2019 to 2020, suggesting a growing use by non-members.
+
+```{r}
+# Load libraries
+library(dplyr)
+library(ggplot2)
+
+# Bar chart: Average ride length by user type
+fg1 <- ggplot(pivot_table, aes(x = usertype, y = Mean_min, fill = usertype)) +
+  geom_col(width = 0.6) +
+  labs(
+    title = "Average Ride Length by User Type",
+    x = "User Type",
+    y = "Mean Ride Length (minutes)"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+fg1
+
+# Average ride length by year and user type
+fg1a <- ggplot(pivot_table2, aes(x = factor(Year), y = Mean_min, fill = usertype)) +
+  geom_col(position = "dodge") +
+  labs(title = "Average Ride Length of Casual and Member Users (2019 Q1 vs 2020 Q1)",
+       x = "Year",
+       y = "Mean Ride Length (min)",
+       fill = "User Type") +
+  theme_minimal()
+
+fg1a
+```
+
+### 3.2 Average ride duration comparison on different days
+
+Figure 2 below shows the average ride length for casual and member users across each day of the week.
+Casual users tend to take longer rides during weekends (Saturday and Sunday), while members’ ride lengths are relatively consistent throughout the week, slightly higher on weekdays, reflecting commuting behavior.
+
+```{r}
+#
+combined_df_clean$day_of_week <- factor(
+  combined_df_clean$day_of_week,
+  levels = c("1","2","3","4","5","6","7"),
+  labels = c("Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday")
+)
+
+weekday_counts <- combined_df_clean %>%
+  group_by(usertype, day_of_week) %>%
+  summarise(Count = n(), .groups = "drop")
+
+
+pivot_table <- combined_df_clean %>%
+  group_by(day_of_week, usertype) %>%
+  summarise(
+    Mean_min = mean(ride_length_min, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+fg2 <- ggplot(pivot_table, aes(x = usertype, y = Mean_min, fill = usertype)) +
+  geom_col(width = 0.6) +
+  facet_wrap(~ day_of_week, ncol = 4) +
+  labs(
+    title = "Average Ride Length by User Type Across Weekdays",
+    #subtitle = "Each panel represents one day of the week",
+    x = "User Type",
+    y = "Average Ride Length (minutes)",
+    size = 4
+  ) +
+  theme_minimal() +
+  theme(
+    legend.position = "none",
+    #strip.text = element_text(face = "bold")
+  )
+
+
+fg2
+```
+
+
+### 3.3 Number of rides comparison on different days
+
+Figure 3 displays the number of rides by day of the week for casual and member users.
+
+Members take many more rides on weekdays, reflecting regular commuting patterns. Casual users take more rides during weekends, confirming that recreational riding is more common among non-members.
+This figure highlights the distinct usage patterns between casual and member users and between weekdays and weekends.
+
+```{r}
+
+# First, there is an overall comparison by user type
+fg3<- ggplot(pivot_table2, aes(x = factor(Year), y = Count, fill = usertype)) +
+  geom_col(position = "dodge") +
+  labs(
+    title = "Number of Rides by User Type (2019 Q1 vs 2020 Q1)",
+    x = "Year",
+    y = "Count of Rides",
+    fill = "User Type"
+  ) +
+  theme_minimal()
+fg3
+
+#  Boxplot: Weekly ride count by user type
+fg3a <- ggplot(weekday_counts,
+       aes(x = day_of_week, y = Count, fill = usertype)) +
+  geom_col(position = "dodge") +
+  labs(
+    title = "Number of Rides by Day of Week and User Type (2019 Q1 & 2020 Q1)",
+    #subtitle = "Comparison between Casual and Member users (2019 Q1 vs 2020 Q1)",
+    x = "Day of Week",
+    y = "Number of Rides",
+    fill = "User Type"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 30, hjust = 1),
+    #plot.title = element_text(face = "bold")
+  )
+
+fg3a
+
+
+```
+
+
+## 4. Summary
+This case study analyzed bike-sharing usage using Divvy Q1 datasets from 2019 and 2020. 
+
+Descriptive statistics revealed clear differences between casual and member users. 
+
+Casual users tend to take longer rides, especially on weekends, while members primarily ride on weekdays with shorter durations. 
+
+Visualizations further highlighted these patterns, showing the distribution of rides by day of the week and average ride lengths by user type and year.
+
+Overall, the analysis provides insights into user behavior patterns: members are more consistent weekday riders with shorter trips, whereas casual users take longer, less frequent rides, often on weekends. These findings can inform operational decisions and targeted marketing strategies for the bike-sharing company.
+
+
