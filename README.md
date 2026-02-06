@@ -3,9 +3,11 @@
 ## Project Overview
 This case study analyzes bike usage patterns using data from Divvy, a bike-sharing service in Chicago. The data comes from 2019 Q1 and 2020 Q1 datasets provided by Motivate International Inc.  
 
-We aim to understand how **member users** and **casual users** differ in their riding behavior.
+We aim to understand how **member users** and **casual users** differ in their riding behavior, 为这个自行车公司后面的营销提供有用的insight
 
 ## Data Cleaning
+- Mark empty cells as NA
+- Removed records that do not have a start or an ending time
 - Merged 2019 and 2020 datasets into one table.
 - Standardized column names and formats.
 - Removed anomalous rides longer than 24 hours.
